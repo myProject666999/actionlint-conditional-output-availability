@@ -1,0 +1,90 @@
+on: push
+
+jobs:
+  cases:
+    runs-on: ubuntu-latest
+    steps:
+      # A conditional step whose outputs may be empty when it is skipped.
+      - id: conditional
+        if: ${{ github.event_name == 'pull_request' }}
+        run: echo "value=one" >> "$GITHUB_OUTPUT"
+
+      # A step which always runs (constant true condition). Its outputs are not "may be empty".
+      - id: constant_true
+        if: ${{ true }}
+        run: echo "value=two" >> "$GITHUB_OUTPUT"
+
+      # No guard when reading a conditional step's outputs: "may be empty" at the outputs access.
+      - run: echo ${{ steps.conditional.outputs.value }}
+
+      # Reading outcome/conclusion itself never triggers "may be empty".
+      - run: echo ${{ steps.conditional.outcome }}
+      - run: echo ${{ steps.conditional.conclusion }}
+
+      # Constant true source: no "may be empty" even without a guard.
+      - run: echo ${{ steps.constant_true.outputs.value }}
+
+      # Explicit success guard on outcome: protected, no diagnostic.
+      - if: ${{ steps.conditional.outcome == 'success' }}
+        run: echo ${{ steps.conditional.outputs.value }}
+
+      # Explicit success guard on conclusion (no continue-on-error): protected.
+      - if: ${{ steps.conditional.conclusion == 'success' }}
+        run: echo ${{ steps.conditional.outputs.value }}
+
+      # Merely mentioning the step name is not a guard.
+      - if: ${{ steps.conditional.conclusion != 'skipped' }}
+        run: echo ${{ steps.conditional.outputs.value }}
+
+      # always() lets the step run even when predecessors did not succeed: not a guarantee.
+      - if: ${{ always() }}
+        run: echo ${{ steps.conditional.outputs.value }}
+
+      # failure() likewise runs when predecessors failed: not a guarantee.
+      - if: ${{ failure() }}
+        run: echo ${{ steps.conditional.outputs.value }}
+
+      # Bare success() is not a per-step guard.
+      - if: ${{ success() }}
+        run: echo ${{ steps.conditional.outputs.value }}
+
+      # Same condition plus an explicit null fallback: protected.
+      - if: ${{ github.event_name == 'pull_request' }}
+        run: echo ${{ steps.conditional.outputs.value || null }}
+
+      # Null fallback without the same condition: not protected by the supported form.
+      - run: echo ${{ steps.conditional.outputs.value || null }}
+
+      # Same condition but no fallback: not protected.
+      - if: ${{ github.event_name == 'pull_request' }}
+        run: echo ${{ steps.conditional.outputs.value }}
+
+      # Case insensitive step ID. Conditional source, no guard: "may be empty".
+      - run: echo ${{ steps.CONDITIONAL.outputs.value }}
+
+      # Forward reference: the step is defined later and has not run.
+      - run: echo ${{ steps.later.outputs.value }}
+
+      # Self reference: the step's own outputs are not available while it runs.
+      - id: selfy
+        run: echo ${{ steps.selfy.outputs.value }}
+
+      - id: later
+        if: true
+        run: echo "value=three" >> "$GITHUB_OUTPUT"
+
+  coe:
+    runs-on: ubuntu-latest
+    steps:
+      - id: guarded_step
+        if: ${{ github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        run: echo "value=four" >> "$GITHUB_OUTPUT"
+
+      # Under continue-on-error an outcome success check still proves the step succeeded.
+      - if: ${{ steps.guarded_step.outcome == 'success' }}
+        run: echo ${{ steps.guarded_step.outputs.value }}
+
+      # Under continue-on-error a conclusion success check cannot prove outputs were written.
+      - if: ${{ steps.guarded_step.conclusion == 'success' }}
+        run: echo ${{ steps.guarded_step.outputs.value }}

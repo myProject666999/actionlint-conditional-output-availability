@@ -275,6 +275,33 @@ func TestConfigGenerateDefaultConfigFileOK(t *testing.T) {
 	if len(c.Paths) != 0 {
 		t.Fatal(c.Paths)
 	}
+	// The optional steps-output check must stay disabled in the generated config.
+	if c.CheckStepOutput {
+		t.Fatal("check-step-output must default to false in the generated configuration file")
+	}
+}
+
+func TestConfigParseCheckStepOutput(t *testing.T) {
+	testCases := []struct {
+		what string
+		in   string
+		want bool
+	}{
+		{what: "absent means disabled", in: "", want: false},
+		{what: "explicit false", in: "check-step-output: false\n", want: false},
+		{what: "explicit true", in: "check-step-output: true\n", want: true},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.what, func(t *testing.T) {
+			c, err := ParseConfig([]byte(tc.in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.CheckStepOutput != tc.want {
+				t.Fatalf("wanted CheckStepOutput=%v but got %v", tc.want, c.CheckStepOutput)
+			}
+		})
+	}
 }
 
 func TestConfigGenerateDefaultConfigFileError(t *testing.T) {

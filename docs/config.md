@@ -49,6 +49,12 @@ paths:
     is available.
 - `config-variables`: [Configuration variables][vars]. When an array is set, actionlint will check `vars` properties strictly.
   An empty array means no variable is allowed. The default value `null` disables the check.
+- `check-step-output`: Optional boolean (default `false`). When `true`, enables the `steps-output` rule which checks
+  availability of `steps.<step_id>.outputs.*` values: forward references, self references, and reading outputs of a
+  step which may be skipped by its `if:` condition. The check is conservative; see the
+  [checks documentation](checks.md#check-steps-output-availability) for the supported guards and its limits. The
+  reported diagnostics follow the usual error format, affect the exit status like other errors, and can be filtered
+  with `ignore`.
 - `paths`: Configurations for specific file path patterns. This is a mapping from a glob pattern and the corresponding
   configuration.
   - `{glob}`: A file path glob pattern to apply the configuration. The path separator is always '/'. It is matched to the

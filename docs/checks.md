@@ -642,6 +642,104 @@ test.yaml:15:23: property "some-value" is not defined in object type {some_value
 The 'My action with output' action defines one output `some_value`. The property is typed at `steps.my_action.outputs` object
 so that actionlint can check incorrect property accesses like a typo in the output name.
 
+<a id="check-steps-output-availability"></a>
+## Availability of `steps.<step_id>.outputs` values (optional)
+
+This check is **disabled by default**. Enable it by setting `check-step-output: true` in the
+[configuration file](config.md):
+
+```yaml
+check-step-output: true
+```
+
+The existence of an output in an action's declared interface does not guarantee that the value exists in a particular
+run. A step with an `if:` condition that is not a constant truth value may be skipped, in which case its `outputs`
+object is empty. Reading such an output then yields `null`. This optional rule adds diagnostics on top of the existing
+type checks. It never relaxes them: illegal forward references and self references stay illegal.
+
+Three kinds of findings are produced.
+
+### Reference to a step which has not run
+
+When a step reads `steps.<id>.outputs.*` where `<id>` belongs to a step defined later (a forward reference) or to the
+step itself (a self reference), the existing `expression` error is kept and enriched with the definition location of
+the referenced step ID instead of producing a duplicate finding.
+
+```yaml
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ${{ steps.later.outputs.value }}   # ERROR: "later" has not run yet
+      - id: later
+        run: echo "value=one" >> "$GITHUB_OUTPUT"
+```
+
+### Output which may be empty
+
+Reading `steps.<id>.outputs.*` from a step that may be skipped by its `if:` condition, without a recognized guard, is
+reported at the concrete `outputs` access. Reading `steps.<id>.outcome` or `steps.<id>.conclusion` themselves never
+triggers this diagnostic because those values are always present.
+
+```yaml
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - id: conditional
+        if: ${{ github.event_name == 'pull_request' }}
+        run: echo "value=one" >> "$GITHUB_OUTPUT"
+      - run: echo ${{ steps.conditional.outputs.value }}   # ERROR: may be empty
+```
+
+Only a small, explicit set of guards is recognized. General condition implication is not solved, so anything outside
+these forms is treated conservatively (a diagnostic is emitted).
+
+1. **Explicit success judgment of the same step.** The referring step's `if:` contains, in an `&&` (conjunction)
+   position, an equality check that the source step's `outcome` or `conclusion` equals the string `success`:
+
+   ```yaml
+   - if: ${{ steps.conditional.outcome == 'success' }}
+     run: echo ${{ steps.conditional.outputs.value }}   # OK
+   ```
+
+   Merely mentioning the step name is **not** a guard (for example `steps.conditional.conclusion != 'skipped'`). The
+   state functions `always()`, `failure()`, `cancelled()`, and a bare `success()` are **not** guarantees either: they
+   commonly let the referring step run even when a predecessor did not succeed.
+
+   Under `continue-on-error`, `outcome` and `conclusion` differ: `outcome` reflects the result before the
+   continue-on-error handling while `conclusion` reflects the result after it. Therefore, when the source step may run
+   with `continue-on-error`, only an `outcome == 'success'` check is accepted; a `conclusion == 'success'` check cannot
+   prove that the step wrote its outputs.
+
+2. **Same condition plus an explicit null fallback.** The referring step uses the identical `if:` condition as the
+   source step and the read carries an explicit `null` fallback:
+
+   ```yaml
+   - if: ${{ github.event_name == 'pull_request' }}
+     run: echo ${{ steps.conditional.outputs.value || null }}   # OK
+   ```
+
+### Limits and possible false results
+
+The analysis is deliberately conservative and does not aim to be complete.
+
+- **False positives (a warning where the value is actually present):** guards not in the supported forms are not
+  understood, so a correctly protected read may still be reported. A step which always runs in practice but whose
+  `if:` condition is not statically provable as constant-true is treated as skippable.
+- **False negatives (no warning where the value can be empty):** when any step ID in the job is dynamic (contains an
+  expression) or duplicated, a complete index cannot be built and the rule stays silent. Dynamic index accesses such
+  as `steps[expr].outputs.x` are not resolved. Conditions are not propagated across jobs and matrix combinations are
+  not enumerated. The guard only narrows the conditions under which the source step *executed*; whether a shell script
+  or action actually wrote a declared output at runtime is outside the scope of static analysis.
+
+Because actionlint has no separate warning level, these diagnostics affect the exit status exactly like other errors.
+They use the existing position/output formatting and the existing `ignore` mechanism (the `-ignore` option and the
+`paths.*.ignore` configuration), and are reported under the `steps-output` kind for the "may be empty" findings. When
+the check is disabled, all existing output is unchanged.
+
 <a id="check-contextual-matrix-object"></a>
 ## Contextual typing for `matrix` object
 

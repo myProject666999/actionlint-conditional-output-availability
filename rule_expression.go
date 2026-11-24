@@ -29,6 +29,13 @@ type RuleExpression struct {
 	workflow         *Workflow
 	localActions     *LocalActionsCache
 	localWorkflows   *LocalReusableWorkflowCache
+	// stepsOutput is the optional "steps-output" rule companion. When non-nil and enabled, every
+	// expression checked while a step is visited is also analyzed for steps output availability.
+	stepsOutput *RuleStepsOutput
+	// suppressStepsRefErrs is true while the optional rule is enabled. In that case the generic
+	// "property is not defined" errors emitted for steps references are replaced by the more
+	// specific diagnostics (which keep the same error category) instead of being duplicated.
+	suppressStepsRefErrs bool
 }
 
 // NewRuleExpression creates new RuleExpression instance.
@@ -49,6 +56,26 @@ func NewRuleExpression(actionsCache *LocalActionsCache, workflowCache *LocalReus
 		localActions:     actionsCache,
 		localWorkflows:   workflowCache,
 	}
+}
+
+// EnableStepsOutputCheck attaches the optional "steps-output" companion rule. When enabled,
+// availability diagnostics are produced and the generic undefined-property errors for steps
+// references are replaced rather than duplicated. This method is only called when the
+// "check-step-output" configuration is enabled.
+func (rule *RuleExpression) EnableStepsOutputCheck(companion *RuleStepsOutput) {
+	rule.stepsOutput = companion
+	rule.suppressStepsRefErrs = true
+}
+
+// NewRuleExpressionWithStepsOutput creates a RuleExpression which optionally runs the
+// "steps-output" availability analysis. When companion is nil the behavior is identical to
+// NewRuleExpression (the optional check is disabled).
+func NewRuleExpressionWithStepsOutput(actionsCache *LocalActionsCache, workflowCache *LocalReusableWorkflowCache, companion *RuleStepsOutput) *RuleExpression {
+	rule := NewRuleExpression(actionsCache, workflowCache)
+	if companion != nil {
+		rule.EnableStepsOutputCheck(companion)
+	}
+	return rule
 }
 
 // VisitWorkflowPre is callback when visiting Workflow node before visiting its children.
@@ -280,6 +307,11 @@ func (rule *RuleExpression) VisitJobPost(n *Job) error {
 
 // VisitStep is callback when visiting Step node.
 func (rule *RuleExpression) VisitStep(n *Step) error {
+	if rule.stepsOutput != nil {
+		// Keep the companion's "current step" in sync for expressions checked during this visit.
+		rule.stepsOutput.current = n
+	}
+
 	rule.checkString(n.Name, "jobs.<job_id>.steps.name")
 	rule.checkIfCondition(n.If, "jobs.<job_id>.steps.if")
 
@@ -319,6 +351,12 @@ func (rule *RuleExpression) VisitStep(n *Step) error {
 			"conclusion": StringType{},
 			"outcome":    StringType{},
 		})
+	}
+
+	if rule.stepsOutput != nil {
+		// Expression checks for this step are finished. Clear the context so job/workflow level
+		// expressions analyzed afterwards are not mistaken for step-level ones.
+		rule.stepsOutput.current = nil
 	}
 
 	return nil
@@ -809,11 +847,62 @@ func (rule *RuleExpression) checkSemanticsOfExprNode(expr ExprNode, line, col in
 	}
 
 	ty, errs := c.Check(expr)
+
+	if rule.stepsOutput != nil {
+		// Run the availability analysis first so its reported positions are known when deciding
+		// whether to suppress a generic undefined-property error. The analysis only applies to
+		// expressions of a step (not to job/workflow level sections), which the companion
+		// enforces via its "current" field.
+		rule.stepsOutput.analyzeExpression(expr, line, col)
+	}
+
 	for _, err := range errs {
+		if rule.suppressStepsRefErrs && isUndefinedStepsPropertyError(err, expr) {
+			pos := convertExprLineColToPos(err.Line, err.Column, line, col)
+			if rule.stepsOutput != nil && rule.stepsOutput.reportedAt(Pos{Line: line, Col: col}, *pos) {
+				// Replaced by a specific "steps-output" diagnostic at the same position. Do not
+				// emit the generic undefined-property error to avoid duplicate findings.
+				continue
+			}
+			// Forward/self references keep the original "expression" error category, but the
+			// availability index can add the definition location of the referenced step.
+			if enriched, ok := rule.stepsOutput.enrichUndefinedStepsError(err, expr, line, col); ok {
+				rule.Error(pos, enriched)
+				continue
+			}
+		}
 		rule.exprError(err, line, col)
 	}
 
 	return ty, len(errs) == 0
+}
+
+// isUndefinedStepsPropertyError reports whether an expression semantics error is the generic
+// "property ... is not defined in object type" finding raised for a `steps.<id>` (or
+// `steps['<id>']`) reference. The AST is checked in addition to the message shape so that
+// undefined properties on unrelated objects are never considered for suppression.
+func isUndefinedStepsPropertyError(err *ExprError, root ExprNode) bool {
+	if !strings.HasPrefix(err.Message, "property ") ||
+		!strings.Contains(err.Message, "is not defined in object type") {
+		return false
+	}
+	matched := false
+	VisitExprNode(root, func(node, _ ExprNode, entering bool) {
+		if matched || !entering {
+			return
+		}
+		switch n := node.(type) {
+		case *ObjectDerefNode:
+			if id, ok := stepIDOfReceiver(n.Receiver); ok && id != "" {
+				matched = true
+			}
+		case *IndexAccessNode:
+			if id, ok := stepIDOfReceiver(n.Operand); ok && id != "" {
+				matched = true
+			}
+		}
+	})
+	return matched
 }
 
 func (rule *RuleExpression) checkSemantics(src string, line, col int, checkUntrusted bool, workflowKey string) (ExprType, int, bool) {

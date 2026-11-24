@@ -554,6 +554,11 @@ func (l *Linter) check(
 	if w != nil {
 		dbg := l.debugWriter()
 
+		var stepsOutput *RuleStepsOutput
+		if cfg != nil && cfg.CheckStepOutput {
+			stepsOutput = NewRuleStepsOutput()
+		}
+
 		rules := []Rule{
 			NewRuleMatrix(),
 			NewRuleCredentials(),
@@ -567,9 +572,12 @@ func (l *Linter) check(
 			NewRuleGlob(),
 			NewRulePermissions(),
 			NewRuleWorkflowCall(path, localReusableWorkflows),
-			NewRuleExpression(localActions, localReusableWorkflows),
+			NewRuleExpressionWithStepsOutput(localActions, localReusableWorkflows, stepsOutput),
 			NewRuleDeprecatedCommands(),
 			NewRuleIfCond(),
+		}
+		if stepsOutput != nil {
+			rules = append(rules, stepsOutput)
 		}
 		if l.shellcheck != "" {
 			r, err := NewRuleShellcheck(l.shellcheck, proc)

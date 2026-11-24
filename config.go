@@ -64,6 +64,11 @@ type Config struct {
 	// listed here as undefined config variables.
 	// https://docs.github.com/en/actions/learn-github-actions/variables
 	ConfigVariables []string `yaml:"config-variables"`
+	// CheckStepOutput enables the optional "steps-output" rule. The rule reports diagnostics about availability
+	// of `steps.<step_id>.outputs.*` values: references to steps which have not run yet (forward references),
+	// references to the step itself, and reading outputs of a step which may be skipped by its `if` condition.
+	// This check is opt-in and disabled by default because it is conservative and can produce false positives.
+	CheckStepOutput bool `yaml:"check-step-output"`
 	// Paths is a "paths" mapping in the configuration file. The keys are glob patterns to match file paths.
 	// And the values are corresponding configurations applied to the file paths.
 	Paths map[string]PathConfig `yaml:"paths"`
@@ -142,6 +147,12 @@ func writeDefaultConfigFile(path string) error {
 # organization. ` + "`null`" + ` means disabling configuration variables check.
 # Empty array means no configuration variable is allowed.
 config-variables: null
+
+# Optional rule to check availability of 'steps.<step_id>.outputs.*' values.
+# When enabled, forward references, self references, and reading outputs of a
+# step which may be skipped by its 'if' condition are reported. The check is
+# conservative; see docs/checks.md for its limits and possible false results.
+check-step-output: false
 
 # Configuration for file paths. The keys are glob patterns to match to file
 # paths relative to the repository root. The values are the configurations for
